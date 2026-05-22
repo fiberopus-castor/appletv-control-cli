@@ -32,10 +32,11 @@ from functools import wraps
 from pathlib import Path
 from typing import Any
 
-# stdout is the MCP-transport — redirect any stray prints/logging to stderr
-_real_stdout = sys.stdout
-sys.stdout = sys.stderr
-
+# stdout is reserved for the MCP JSON-RPC transport. Do NOT reassign it —
+# FastMCP.run() writes the protocol to sys.stdout at runtime, so any
+# reassignment (even sys.stdout = sys.stderr) sends the initialize response
+# into the void and breaks the handshake. Stray prints must instead be
+# silenced at their source; logging below is already pinned to sys.stderr.
 from mcp.server.fastmcp import FastMCP  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, stream=sys.stderr,

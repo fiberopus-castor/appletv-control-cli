@@ -5,6 +5,11 @@ All notable changes to AppleTV_Control will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] — 2026-05-22
+
+### Fixed
+- **MCP handshake breakage**: removed `sys.stdout = sys.stderr` reassignment in `mcp-server/appletv_dg_mcp.py`. The stdio MCP transport requires stdout to remain bound to the FastMCP JSON-RPC writer; reassigning it silently sent the `initialize` response into the void, causing the client to time out after 30 s. Stray output must instead be silenced at its source (logging is already pinned to stderr).
+
 ## [0.1.0] — 2026-05-22
 
 Initial public release.

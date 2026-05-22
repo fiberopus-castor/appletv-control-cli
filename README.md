@@ -105,14 +105,23 @@ atv-dg power_state                          # tvOS-26-Bug, gibt "Unknown"
 - Verschlüsselte Streams (z.B. Netflix-Inhalte) brauchen App-eigenes Login
 - Apple-TV-Reboot via Companion ist nicht supportet (HW-Tasten an Remote nötig)
 
-## Integration in HA (optional)
-HA `shell_command` Definition für Bonn-HA (kann von Esslingen-Federation aufgerufen werden):
+## Integration in HA (LIVE seit 2026-05-22)
 
-```yaml
-# configuration.yaml
-shell_command:
-  atv_dg_launch: '/home/pol/Claude/cli-tools/AppleTV_Control/bin/atv-dg launch_app={{ bundle_id }}'
-  atv_dg_home: '/home/pol/Claude/cli-tools/AppleTV_Control/bin/atv-dg home'
+**Architektur:** HTTP-Wrapper (`wrapper/server.py`, Flask) als systemd-User-Service auf claude-code-server (`100.109.100.33:9876`). Bonn-HA (Docker, network_mode=host) ruft per `rest_command:` darauf zu. Esslingen-HA (auf NUC) hat KEINE Route zu `100.109.100.33` (HA-OS-Container ohne Tailscale-Add-on), daher dort KEINE Integration — Bonn-HA sieht Esslinger Entities ohnehin via Federation und reicht.
+
+**Files:**
+- Wrapper: `~/Claude/cli-tools/AppleTV_Control/wrapper/server.py` (+ `README.md`)
+- systemd-Unit: `~/.config/systemd/user/atv-wrapper.service`
+- Auth-Token: `~/Claude/credentials/AppleTV/wrapper-token.json` (chmod 600)
+- HA-Package: `~/Claude/projects/Percy_Privat_Projekte/Home_Automatisierung_Bonn/homeassistant/config/packages/atv_dg_esslingen.yaml`
+- HA-Dashboard-View: `dashboards/castor_home.yaml` → Tab "Apple TV DG"
+
+**Bonn-HA-Entities:** `sensor.dg_apple_tv_app|lautstarke_wrapper|playing_state` (polling 60s) + 14 `script.dg_atv_*`-Convenience-Skripte.
+
+```bash
+# Service-Management
+systemctl --user status atv-wrapper
+journalctl --user -u atv-wrapper -f
 ```
 
 ## Wiederherstellung bei kompletter Pairing-Drift
