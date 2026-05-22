@@ -1,0 +1,78 @@
+#!/bin/bash
+# Apple TV DG Wohnzimmer Esslingen - Audio-Routing Wrapper
+#
+# Subcommands:
+#   list         Show current AirPlay output devices
+#   homepod-on   Route Apple TV audio to HomePod "DG Wohnzimmer"
+#   homepod-off  Clear external outputs (back to TV/HDMI speakers)
+#   both         Multi-output: HomePod + Apple TV itself (best-effort)
+#   id           Print Apple TV's own AirPlay device_id
+#   info         Print HomePod identifier from credentials
+#
+# Note: uses AirPlay + RAOP protocols only (Companion init breaks on tvOS 26.5).
+#       output_devices command does NOT require Companion.
+set -e
+SCRIPT_DIR=$(dirname "$(readlink -f "$0")")
+ROOT=$(dirname "$SCRIPT_DIR")
+CREDS=~/Claude/credentials/AppleTV/dg-wohnzimmer.json
+
+AIRPLAY=$(jq -r .airplay_credentials "$CREDS")
+RAOP=$(jq -r .raop_credentials "$CREDS")
+HOST=$(jq -r .host_lan "$CREDS")
+HOMEPOD_ID=$(jq -r .homepod_dg_wohnzimmer_id "$CREDS")
+ATV_ID=$(jq -r .identifier "$CREDS")
+ATVREMOTE="$ROOT/venv/bin/atvremote"
+
+run_atv() {
+  "$ATVREMOTE" -s "$HOST" \
+    --airplay-credentials "$AIRPLAY" \
+    --raop-credentials "$RAOP" \
+    "$@" 2>/dev/null
+}
+
+cmd="${1:-list}"
+case "$cmd" in
+  list)
+    echo "== Current AirPlay output devices on Apple TV DG Wohnzimmer =="
+    run_atv output_devices
+    ;;
+  homepod-on)
+    echo "Setting HomePod ($HOMEPOD_ID) as audio output..."
+    run_atv set_output_devices="$HOMEPOD_ID"
+    sleep 1
+    echo "-- Verification --"
+    run_atv output_devices
+    ;;
+  homepod-off)
+    echo "Clearing external outputs (back to TV speakers)..."
+    # Remove HomePod explicitly; set_output_devices with no arg may error.
+    run_atv remove_output_devices="$HOMEPOD_ID" || true
+    sleep 1
+    echo "-- Verification --"
+    run_atv output_devices
+    ;;
+  both)
+    echo "Setting HomePod + Apple TV (multi-output)..."
+    # set_output_devices accepts comma-separated list
+    run_atv set_output_devices="$HOMEPOD_ID,$ATV_ID"
+    sleep 1
+    echo "-- Verification --"
+    run_atv output_devices
+    ;;
+  add-homepod)
+    echo "Adding HomePod to current output devices..."
+    run_atv add_output_devices="$HOMEPOD_ID"
+    sleep 1
+    run_atv output_devices
+    ;;
+  id)
+    echo "Apple TV own AirPlay id: $ATV_ID"
+    ;;
+  info)
+    jq '{homepod_id: .homepod_dg_wohnzimmer_id, homepod_ip: .homepod_dg_wohnzimmer_ip, homepod_name: .homepod_dg_wohnzimmer_name, atv_id: .identifier, atv_ip: .host_lan}' "$CREDS"
+    ;;
+  *)
+    echo "Usage: atv-dg-audio {list|homepod-on|homepod-off|both|add-homepod|id|info}" >&2
+    exit 2
+    ;;
+esac

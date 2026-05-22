@@ -1,0 +1,31 @@
+#!/bin/bash
+# Apple TV DG Wohnzimmer Esslingen - launch wrapper that guarantees HomePod audio
+#
+# Usage: atv-dg-with-homepod launch_app=com.netflix.Netflix
+#        atv-dg-with-homepod play_url=https://...
+#
+# Behaviour:
+#   1. Ensure HomePod is set as audio output (idempotent)
+#   2. Then forward all args to plain atv-dg
+#
+# Safety: aborts if Apple TV is currently playing (avoids audio cut while Mom watches).
+set -e
+SCRIPT_DIR=$(dirname "$(readlink -f "$0")")
+ROOT=$(dirname "$SCRIPT_DIR")
+CREDS=~/Claude/credentials/AppleTV/dg-wohnzimmer.json
+HA_TOKEN_FILE=~/Claude/credentials/Esslingen/ha-token.json
+
+# Safety: check active playback via HA
+if [ -f "$HA_TOKEN_FILE" ]; then
+  TOKEN=$(jq -r .long_lived_access_token "$HA_TOKEN_FILE")
+  HA_URL=$(jq -r .url_lan "$HA_TOKEN_FILE")
+  STATE=$(curl -s -m 5 -H "Authorization: Bearer $TOKEN" "$HA_URL/api/states/media_player.dg_wohnzimmer_2" | jq -r .state 2>/dev/null || echo unknown)
+  if [ "$STATE" = "playing" ]; then
+    echo "WARN: Apple TV currently playing — aborting audio-route change to avoid cut." >&2
+    echo "      Use atv-dg-audio homepod-on manually if intended." >&2
+    exit 3
+  fi
+fi
+
+"$SCRIPT_DIR/atv-dg-audio" homepod-on >/dev/null 2>&1 || echo "WARN: HomePod route set failed, continuing." >&2
+exec "$SCRIPT_DIR/atv-dg" "$@"

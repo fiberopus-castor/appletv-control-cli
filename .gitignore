@@ -1,0 +1,38 @@
+# Python venv (large, platform-specific, recreate on install)
+venv/
+.venv/
+env/
+
+# Python build/cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.pytest_cache/
+
+# Local state, runtime artifacts
+*.flag
+*.pid
+wrapper/server.pid
+_monitoring/
+*.log
+
+# Editor / OS
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*~
+
+# Credentials safety net — credentials live OUTSIDE this repo
+# (in ~/Claude/credentials/AppleTV/), but block any accidental imports:
+**/credentials/
+**/*credentials*.json
+**/*token*.json
+**/wrapper-token*
+**/dg-wohnzimmer*.json
+
+# Local override / dev
+.env
+.env.local

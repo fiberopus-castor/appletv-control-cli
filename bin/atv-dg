@@ -1,0 +1,20 @@
+#!/bin/bash
+# Apple TV DG Wohnzimmer Esslingen - persistent CLI wrapper
+# Usage: atv-dg launch_app=com.netflix.Netflix
+#        atv-dg power_state
+#        atv-dg play_url=https://...
+set -e
+SCRIPT_DIR=$(dirname "$(readlink -f "$0")")
+ROOT=$(dirname "$SCRIPT_DIR")
+CREDS=~/Claude/credentials/AppleTV/dg-wohnzimmer.json
+
+AIRPLAY=$(jq -r .airplay_credentials "$CREDS")
+COMPANION=$(jq -r .companion_credentials "$CREDS")
+RAOP=$(jq -r .raop_credentials "$CREDS")
+HOST=$(jq -r .host_lan "$CREDS")
+
+"$ROOT/venv/bin/atvremote" -s "$HOST" \
+  --airplay-credentials "$AIRPLAY" \
+  --companion-credentials "$COMPANION" \
+  --raop-credentials "$RAOP" \
+  "$@"

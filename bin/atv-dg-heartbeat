@@ -1,0 +1,216 @@
+#!/usr/bin/env python3
+"""Apple TV DG Esslingen Companion-Heartbeat.
+
+Reads `atv-dg volume` (lightweight, read-only — does NOT wake TV from standby).
+States:
+  OK        — volume integer/float parsed successfully
+  DEGRADED  — first attempt failed; retried after re-applying tvOS26 patch
+  BROKEN    — all retries failed → raises ALERT flag for User to investigate
+
+Schedule: 6h via systemd-user-timer.
+
+Outputs:
+- JSON line appended to daily log under _monitoring/
+- Alert flag-file on BROKEN
+- Optional HA-Esslingen persistent_notification (non-fatal)
+
+Safety:
+- `volume` is read-only via AirPlay/Companion; will NOT power-wake the TV.
+- No auto-repair beyond patch reapply (re-pair needs PIN on the TV — User-only).
+"""
+from __future__ import annotations
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+import urllib.request
+from datetime import datetime, timezone
+from pathlib import Path
+
+ROOT = Path("/home/pol/Claude/cli-tools/AppleTV_Control")
+ATV_CLI = Path("/home/pol/.local/bin/atv-dg")
+PATCH_SH = ROOT / "patches" / "apply_tvos26_fix.sh"
+
+PROJECT = Path("/home/pol/Claude/projects/Percy_Privat_Projekte/Esslingen_Fernwartung_Mutter")
+MON_DIR = PROJECT / "_monitoring"
+ALERT_FILE = MON_DIR / "ALERT-atv-dg-companion-broken.flag"
+
+CRED_ES_HA = Path("/home/pol/Claude/credentials/Esslingen/ha-token.json")
+HA_ES_URL = "http://100.121.183.6:8123"
+
+TIMEOUT_SEC = 30
+RETRY_PAUSE_SEC = 10
+MAX_RETRIES = 2
+
+VOLUME_RE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*$", re.MULTILINE)
+
+
+def utcnow() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def run_volume() -> tuple[bool, float | None, str]:
+    """Run `atv-dg volume`. Returns (ok, value, stderr_tail)."""
+    try:
+        out = subprocess.run(
+            [str(ATV_CLI), "volume"],
+            capture_output=True, text=True, timeout=TIMEOUT_SEC,
+        )
+    except subprocess.TimeoutExpired:
+        return False, None, "timeout"
+    except Exception as e:  # noqa: BLE001
+        return False, None, f"exec: {e}"
+    # The CLI emits warnings to stderr; stdout contains the numeric result.
+    for line in out.stdout.splitlines()[::-1]:
+        m = VOLUME_RE.match(line)
+        if m:
+            try:
+                return True, float(m.group(1)), ""
+            except ValueError:
+                pass
+    return False, None, (out.stderr.strip()[-300:] or out.stdout.strip()[-300:])
+
+
+def reapply_patch() -> str:
+    try:
+        out = subprocess.run(
+            ["bash", str(PATCH_SH)],
+            capture_output=True, text=True, timeout=30,
+        )
+        return (out.stdout + out.stderr).strip()[-200:]
+    except Exception as e:  # noqa: BLE001
+        return f"patch-error: {e}"
+
+
+def push_ha_notification(message: str) -> bool:
+    """Best-effort HA persistent_notification via REST."""
+    try:
+        token = json.loads(CRED_ES_HA.read_text())["long_lived_access_token"]
+    except Exception:  # noqa: BLE001
+        return False
+    payload = {
+        "message": message,
+        "title": "Apple TV DG Companion benötigt Aufmerksamkeit",
+        "notification_id": "atv_dg_companion_broken",
+    }
+    try:
+        req = urllib.request.Request(
+            f"{HA_ES_URL}/api/services/persistent_notification/create",
+            data=json.dumps(payload).encode(),
+            headers={"Authorization": f"Bearer {token}",
+                     "Content-Type": "application/json"},
+            method="POST",
+        )
+        urllib.request.urlopen(req, timeout=8).read()  # noqa: S310
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def push_ha_sensor(state: str, attrs: dict) -> None:
+    try:
+        token = json.loads(CRED_ES_HA.read_text())["long_lived_access_token"]
+    except Exception:  # noqa: BLE001
+        return
+    try:
+        req = urllib.request.Request(
+            f"{HA_ES_URL}/api/states/sensor.apple_tv_dg_companion_health",
+            data=json.dumps({"state": state, "attributes": attrs}).encode(),
+            headers={"Authorization": f"Bearer {token}",
+                     "Content-Type": "application/json"},
+            method="POST",
+        )
+        urllib.request.urlopen(req, timeout=6).read()  # noqa: S310
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def main() -> int:
+    MON_DIR.mkdir(parents=True, exist_ok=True)
+    started = time.time()
+    ts = utcnow()
+    attempts: list[dict] = []
+    state = "BROKEN"
+    volume: float | None = None
+    recovery_actions: list[str] = []
+
+    # Attempt 1
+    ok, vol, err = run_volume()
+    attempts.append({"n": 1, "ok": ok, "err": err, "volume": vol})
+
+    if ok:
+        state = "OK"
+        volume = vol
+    else:
+        # Recovery: re-apply patch (idempotent), then retry.
+        patch_out = reapply_patch()
+        recovery_actions.append({"action": "patch_reapply", "result": patch_out})
+        for i in range(MAX_RETRIES):
+            time.sleep(RETRY_PAUSE_SEC)
+            ok2, vol2, err2 = run_volume()
+            attempts.append({"n": 2 + i, "ok": ok2, "err": err2, "volume": vol2})
+            if ok2:
+                state = "DEGRADED"
+                volume = vol2
+                break
+        else:
+            state = "BROKEN"
+
+    duration = round(time.time() - started, 2)
+    record = {
+        "ts": ts,
+        "atv": "dg",
+        "ok": state == "OK",
+        "state": state,
+        "volume": volume,
+        "attempts": attempts,
+        "recovery": recovery_actions,
+        "duration_sec": duration,
+    }
+
+    # Log line
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    log_file = MON_DIR / f"atv-dg-heartbeat-{today}.jsonl"
+    with log_file.open("a") as f:
+        f.write(json.dumps(record) + "\n")
+
+    # Alert flag handling
+    if state == "BROKEN":
+        with ALERT_FILE.open("a") as f:
+            f.write(json.dumps(record) + "\n")
+        # Notification — non-fatal
+        notified = push_ha_notification(
+            "atv-dg `volume` schlägt seit 3 Versuchen fehl. "
+            "Companion vermutlich entkoppelt → ggf. re-pair am TV nötig "
+            f"(Patch reapply versucht: {recovery_actions[0]['result'] if recovery_actions else 'n/a'})."
+        )
+        record["ha_notified"] = notified
+    elif ALERT_FILE.exists() and state == "OK":
+        # Auto-clear: if previously BROKEN and now OK, retire the flag.
+        try:
+            ALERT_FILE.rename(ALERT_FILE.with_suffix(
+                f".flag.cleared-{today}-{int(time.time())}"))
+            record["alert_cleared"] = True
+        except Exception:  # noqa: BLE001
+            pass
+
+    # Push to HA sensor
+    push_ha_sensor(
+        {"OK": "on", "DEGRADED": "on", "BROKEN": "off"}.get(state, "unknown"),
+        {"friendly_name": "Apple TV DG Companion Health",
+         "icon": "mdi:apple",
+         "state_label": state,
+         "volume": volume,
+         "attempts": len(attempts),
+         "duration_sec": duration,
+         "ts": ts},
+    )
+
+    print(json.dumps(record))
+    return 0 if state == "OK" else (1 if state == "DEGRADED" else 2)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
