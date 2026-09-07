@@ -37,7 +37,7 @@ from typing import Any
 # reassignment (even sys.stdout = sys.stderr) sends the initialize response
 # into the void and breaks the handshake. Stray prints must instead be
 # silenced at their source; logging below is already pinned to sys.stderr.
-from mcp.server.fastmcp import FastMCP  # noqa: E402
+from mcp.server.mcpserver import MCPServer  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, stream=sys.stderr,
                     format="%(asctime)s [%(levelname)s] %(message)s")
@@ -65,7 +65,7 @@ AUDIO_TARGETS = {
     "both": "both",
 }
 
-mcp = FastMCP("appletv-dg")
+mcp = MCPServer("appletv-dg")
 
 
 def handle_errors(func):
